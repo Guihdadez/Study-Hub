@@ -28,6 +28,35 @@ local connections = {}
 local replayUnsub = {}
 local autoExecute = false
 local replay = {enabled = false}
+local trialCards = {enabled = false,
+    buffs = {"OnePunch", "TimeOnKill", "TimeExt", "LessEnemy", "RichKing", "GiantSlayer", "DualDmg", "DmgUp", "ShdUp", "TimeBank", "GlassCannon"},
+    curses = {"Inflation", "ArmoredBoss", "BuffEnemy", "Weakness", "HLHaunted", "Horde", "HLBloodMoon", "TimeLeak", "ShortClock", "HLClockHex", "SealRange", "SealShadow", "SealWeapon"}}
+-- TRIAL CARDS POLICY: penalties first; buff priority breaks ties.
+local function normalizeCardOrder(order, catalog)
+    local result, seen = {}, {}
+    for _, id in ipairs(type(order) == "table" and order or {}) do
+        if catalog[id] and not seen[id] then table.insert(result, id) seen[id] = true end
+    end
+    local missing = {}
+    for id in pairs(catalog) do if not seen[id] then table.insert(missing, id) end end
+    table.sort(missing)
+    for _, id in ipairs(missing) do table.insert(result, id) end
+    return result
+end
+local function chooseTrialCard(choices, buffs, curses)
+    local selected, bestCurse, bestBuff
+    for index, choice in ipairs(choices) do
+        if type(choice) == "table" and type(choice.Buff) == "table" then
+            local curseRank = choice.Curse and (table.find(curses, choice.Curse.Id) or (#curses + 1)) or 0
+            local buffRank = table.find(buffs, choice.Buff.Id) or (#buffs + 1)
+            if not selected or curseRank < bestCurse or (curseRank == bestCurse and buffRank < bestBuff) then
+                selected, bestCurse, bestBuff = index, curseRank, buffRank
+            end
+        end
+    end
+    return selected
+end
+-- END TRIAL CARDS POLICY
 local uiState = {tab = "Dungeon", x = 0.5, y = 0.5, ox = 0, oy = 0, minimizeKey = "RightControl", hideTotal = false}
 -- DUNGEON POLICY
 local dungeonModes = {
@@ -128,6 +157,11 @@ if ok and type(saved) == "table" and saved.userId == player.UserId then
     state.enabled = saved.enabled == true
     pumpkin.enabled = saved.pumpkinEnabled == true
     autoExecute = saved.autoExecute == true
+    if type(saved.trialCards) == "table" then
+        trialCards.enabled = saved.trialCards.enabled == true
+        if type(saved.trialCards.buffs) == "table" then trialCards.buffs = saved.trialCards.buffs end
+        if type(saved.trialCards.curses) == "table" then trialCards.curses = saved.trialCards.curses end
+    end
     if type(saved.replay) == "table" then
         replay.enabled = saved.replay.enabled == true
         replay.last, replay.pending = readRun(saved.replay.last), readRun(saved.replay.pending)
@@ -170,7 +204,7 @@ local function save()
     return pcall(function()
         if type(makefolder) == "function" then pcall(makefolder, "AriseStudyHub") end
         writefile(profilePath, Http:JSONEncode({userId = player.UserId, enabled = state.enabled, misc = misc, dungeon = dungeon,
-            autoExecute = autoExecute, replay = replay, ui = uiState, pumpkinEnabled = pumpkin.enabled}))
+            autoExecute = autoExecute, replay = replay, ui = uiState, pumpkinEnabled = pumpkin.enabled, trialCards = trialCards}))
     end)
 end
 local function connect(signal, callback)
@@ -341,7 +375,13 @@ label("ATIVIDADE", 16, 10, 32, 22, farmStatusCard, 11)
 local status = label("", 16, 40, 32, 105, farmStatusCard, 14)
 status.TextYAlignment = Enum.TextYAlignment.Top
 label("Dungeon", 6, 0, 12, 34, dungeonPage, 26, true)
-label("Escolha o modo. O hub cuida da entrada.", 6, 38, 12, 24, dungeonPage, 13)
+local trialCardsShortcut = button("Trial / Configurar Cards  ↓", 38, dungeonPage)
+trialCardsShortcut.Name = "TrialCardsShortcut"
+trialCardsShortcut.Size = UDim2.new(1, -8, 0, 30)
+trialCardsShortcut.TextColor3 = colors.accent
+connect(trialCardsShortcut.Activated, function()
+    dungeonPage.CanvasPosition = Vector2.new(0, 660)
+end)
 local dungeonToggle = toggleRow("Auto Dungeon", "Entrar automaticamente no modo selecionado.", 78, dungeonPage)
 dungeonToggle.Name = "AutoDungeon"
 local replayToggle = toggleRow("Auto Replay Last", "Repete a ultima partida registrada pelo hub.", 168, dungeonPage)
@@ -357,6 +397,150 @@ local dungeonCombat = toggleRow("Auto Farm", "Mesmo controle de combate da aba F
 local dungeonHint = label("", 6, 532, 12, 48, dungeonPage, 12)
 local dungeonStatus = label("Auto Dungeon desligado.", 6, 590, 12, 50, dungeonPage, 13)
 dungeonStatus.TextYAlignment = Enum.TextYAlignment.Top
+do
+    local definitions = require(storage.Indexer.TimeTrialBuffs)
+    local catalogs = {buffs = {}, curses = {}}
+    for category, tiers in pairs({buffs = definitions.Buffs, curses = definitions.Curses}) do
+        for tier, entries in pairs(tiers) do
+            for _, entry in ipairs(entries) do
+                catalogs[category][entry.Id] = {data = entry, tier = tier}
+            end
+        end
+        trialCards[category] = normalizeCardOrder(trialCards[category], catalogs[category])
+    end
+    local names = {
+        DamageMult = "Dano das armas", ShadowDmg = "Dano das sombras", AllDmg = "Dano de armas e sombras",
+        BossDmg = "Dano contra bosses", FinalDmgMult = "Todo o dano", CritChance = "Chance critica",
+        CritDmg = "Dano critico", WeaponSkillCharge = "Carga da habilidade", DamageMultOff = "Reducao de dano",
+        CoinMult = "Dinheiro", RewardMult = "Recompensas", GemChance = "Chance de gemas",
+        TicketChance = "Chance de tickets", TimeAdd = "Tempo", TimeOnKill = "Tempo por morte",
+        TimeBank = "Aproveitamento do tempo restante", EnemyReduce = "Menos inimigos por sala",
+        ExtraEnemies = "Mais inimigos por sala", EnemyHpMult = "Vida dos inimigos", BossHpMult = "Vida dos bosses",
+        CandyMult = "Soul Candy",
+    }
+    local special = {
+        GlassCannon = "+200% de dano", SealShadows = "Zera o dano das sombras",
+        SealWeapon = "Zera o dano da arma", SealRange = "Sela o alcance das sombras",
+        RoomTimeMult = "Tempo por sala -20%",
+    }
+    local penalties = {GlassCannon = "-30% de tempo por sala", HLMonarchsNight = "+50% de vida dos inimigos"}
+    local function describe(entry)
+        local effect = special[entry.Stat]
+        if entry.Id == "HLMonarchsNight" then effect = "Todo o dano x3" end
+        if not effect then
+            local low = definitions.FormatValue(entry.Display, entry.Min)
+            local high = definitions.FormatValue(entry.Display, entry.Max)
+            effect = (names[entry.Stat] or entry.Text or entry.Stat) .. " " .. low
+            if low ~= high then effect ..= " a " .. high end
+        end
+        return effect
+    end
+    dungeonPage.CanvasSize = UDim2.fromOffset(0, 1360)
+    label("Trial / Prioridade de Cards", 6, 660, 12, 30, dungeonPage, 20, true)
+    local auto = toggleRow("Auto Cards", "Penalidade primeiro; buff desempata. Somente Trial.", 704, dungeonPage)
+    auto.Name = "AutoTrialCards"
+    toggleLook(auto, trialCards.enabled)
+    local statusText = label("Aguardando a proxima selecao da Trial.", 6, 790, 12, 42, dungeonPage, 12)
+    statusText.Name = "TrialCardsStatus"
+    local category, query = "buffs", ""
+    local buffTab = button("Buffs", 842, dungeonPage)
+    buffTab.Size = UDim2.new(0.5, -6, 0, 40)
+    local curseTab = button("Penalidades", 842, dungeonPage)
+    curseTab.Position = UDim2.new(0.5, 2, 0, 842)
+    curseTab.Size = UDim2.new(0.5, -10, 0, 40)
+    local explanation = label("", 6, 892, 12, 40, dungeonPage, 12)
+    local search = make("TextBox", {Name = "TrialCardSearch", PlaceholderText = "Buscar card...", Text = "", ClearTextOnFocus = false,
+        Position = UDim2.fromOffset(2, 942), Size = UDim2.new(1, -8, 0, 40), BackgroundColor3 = colors.card,
+        TextColor3 = colors.text, PlaceholderColor3 = colors.muted, Font = Enum.Font.Gotham, TextSize = 14}, dungeonPage)
+    make("UICorner", {CornerRadius = UDim.new(0, 10)}, search)
+    local list = make("ScrollingFrame", {Name = "TrialCardPriorityList", Position = UDim2.fromOffset(2, 994), Size = UDim2.new(1, -8, 0, 344),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = colors.accent}, dungeonPage)
+    local rowConnections = {}
+    local function render()
+        for _, connection in ipairs(rowConnections) do connection:Disconnect() end
+        table.clear(rowConnections)
+        list:ClearAllChildren()
+        buffTab.BackgroundColor3 = category == "buffs" and colors.accent or colors.card
+        curseTab.BackgroundColor3 = category == "curses" and colors.accent or colors.card
+        explanation.Text = category == "buffs" and "Do buff mais desejado para o menos desejado."
+            or "Da mais aceitavel para a mais prejudicial. Escolhas obrigatorias nao sao puladas."
+        local y = 0
+        for rank, id in ipairs(trialCards[category]) do
+            local item = catalogs[category][id]
+            local entry = item.data
+            if query == "" or string.find(string.lower(entry.Name .. " " .. describe(entry)), query, 1, true) then
+                local row = card(y, 126, list)
+                row.Name = id
+                label(tostring(rank), 8, 8, 16, 20, row, 12, true).Size = UDim2.fromOffset(26, 20)
+                if entry.Icon then
+                    make("ImageLabel", {Name = "OriginalIcon", Image = entry.Icon, BackgroundTransparency = 1,
+                        Position = UDim2.fromOffset(10, 38), Size = UDim2.fromOffset(44, 44)}, row)
+                end
+                label(entry.Name, 62, 6, 150, 25, row, 14, true)
+                local effect = label(describe(entry), 62, 32, 130, 42, row, 12)
+                effect.TextColor3 = category == "curses" and Color3.fromRGB(255, 115, 115) or Color3.fromRGB(125, 235, 155)
+                local note = penalties[id] or entry.PenaltyText
+                local extra = label(note or item.tier, 62, 78, 130, 38, row, 11)
+                extra.TextColor3 = note and Color3.fromRGB(255, 115, 115) or colors.muted
+                for offset, direction in ipairs({-1, 1}) do
+                    local arrow = make("TextButton", {Text = direction == -1 and "↑" or "↓", Position = UDim2.new(1, -44, 0, 10 + (offset - 1) * 46),
+                        Size = UDim2.fromOffset(34, 38), BackgroundColor3 = colors.edge, TextColor3 = colors.text,
+                        Font = Enum.Font.GothamBold, TextSize = 20}, row)
+                    local destination = rank + direction
+                    arrow.Active = destination >= 1 and destination <= #trialCards[category]
+                    arrow.TextTransparency = arrow.Active and 0 or 0.7
+                    table.insert(rowConnections, arrow.Activated:Connect(function()
+                        local order = trialCards[category]
+                        if destination < 1 or destination > #order then return end
+                        order[rank], order[destination] = order[destination], order[rank]
+                        save() render()
+                    end))
+                end
+                y += 134
+            end
+        end
+        list.CanvasSize = UDim2.fromOffset(0, y)
+    end
+    connect(buffTab.Activated, function() category = "buffs" list.CanvasPosition = Vector2.zero render() end)
+    connect(curseTab.Activated, function() category = "curses" list.CanvasPosition = Vector2.zero render() end)
+    connect(search:GetPropertyChangedSignal("Text"), function() query = string.lower(search.Text) list.CanvasPosition = Vector2.zero render() end)
+    table.insert(replayUnsub, function() for _, connection in ipairs(rowConnections) do connection:Disconnect() end end)
+    render()
+    local selection
+    local function vote()
+        if not alive or not trialCards.enabled or not selection or selection.sent
+            or os.clock() >= selection.deadline or storage:GetAttribute("InTimeTrial") ~= true then return end
+        local index = chooseTrialCard(selection.choices, trialCards.buffs, trialCards.curses)
+        if not index then return end
+        local success, problem = pcall(function() general:Fire({Event = "TimeTrialAction", Action = "SelectBuff", Index = index}) end)
+        if success then
+            selection.sent = true
+            local choice = selection.choices[index]
+            statusText.Text = "Voto enviado: " .. tostring(choice.Buff.Name or choice.Buff.Id)
+                .. (choice.Curse and (" / " .. tostring(choice.Curse.Name or choice.Curse.Id)) or " / Sem maldicao")
+        else statusText.Text = "Falha ao votar: " .. tostring(problem) end
+    end
+    connect(auto.Activated, function()
+        trialCards.enabled = not trialCards.enabled
+        toggleLook(auto, trialCards.enabled)
+        save()
+        statusText.Text = trialCards.enabled and "Aguardando a proxima selecao da Trial." or "Auto Cards desligado."
+        vote()
+    end)
+    local subscription = require(storage.BridgeNet2).ReferenceBridge("TRIAL_EVENT"):Connect(function(packet)
+        if not alive or type(packet) ~= "table" then return end
+        if packet.Event == "ShowBuffSelection" then
+            selection = nil
+            if packet.Kind == "Restart" or type(packet.Choices) ~= "table" or type(packet.Voters) ~= "table"
+                or not table.find(packet.Voters, player.UserId) then return end
+            selection = {choices = packet.Choices, deadline = os.clock() + (tonumber(packet.Time) or 15)}
+            vote()
+        elseif packet.Event == "CloseBuffSelection" or packet.Event == "BuffChosen" then
+            selection = nil
+        end
+    end)
+    table.insert(replayUnsub, function() subscription:Disconnect() end)
+end
 label("Misc", 6, 0, 12, 30, miscPage, 22, true)
 local autoExecuteToggle = toggleRow("Auto Execute", "Reabre o hub nas trocas de servidor.", 48, miscPage)
 autoExecuteToggle.Name = "AutoExecute"
@@ -628,7 +812,7 @@ local function refreshDungeon()
     dungeonHint.Position = UDim2.fromOffset(6, y)
     y += 56
     dungeonStatus.Position = UDim2.fromOffset(6, y)
-    dungeonPage.CanvasSize = UDim2.fromOffset(0, y + 60)
+    dungeonPage.CanvasSize = UDim2.fromOffset(0, math.max(1360, y + 60))
     dungeonHint.Text = hasKey and "Selecione uma chave que voce possui. A ativacao no pedestal dentro da instancia ainda e manual."
         or hasCheck and "Usa apenas checkpoints ja liberados. Configure velocidade e saida na aba Misc."
         or "Respeita a disponibilidade e os requisitos do jogo. Ative Auto Farm na aba Farm para combater."
