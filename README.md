@@ -1,8 +1,3 @@
--- Arise StudyHub: arquivo completo, com Auto Execute por teleporte.
-assert(game.GameId == 7074860883, "Este instalador e para Arise")
-assert(type(writefile) == "function" and type(readfile) == "function", "Executor sem arquivos locais")
-if type(makefolder) == "function" then pcall(makefolder, "AriseStudyHub") end
-local hubSource = [====[
 -- Arise: selecao de mobs pelo estado do servidor e ataque pelo modulo nativo.
 assert(game.GameId == 7074860883, "Este arquivo e para Masmorra de Arise")
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -16,13 +11,17 @@ local shared = game:GetService("ReplicatedStorage"):WaitForChild("SharedModules"
 local storage = shared.Parent
 local general = require(storage:WaitForChild("BridgeNet2")).ReferenceBridge("GENERAL_EVENT")
 local weapons = require(shared:WaitForChild("WeaponsModule"))
+local weapons = require(shared:WaitForChild("WeaponsModule"))
+local enemyState = require(shared:WaitForChild("Enemies"):WaitForChild("EnemyLocal"))
 assert(type(weapons.Click) == "function", "Ataque nativo indisponivel")
 local env = getgenv()
 local previous = env.__AriseStudyHub
 if previous and type(previous.destroy) == "function" then previous.destroy() end
 local state = {enabled = false, target = nil, map = nil, kills = 0, attacks = 0}
+local state = {enabled = false, target = nil, map = nil, kills = 0, attacks = 0}
 local pumpkin = {enabled = false, collected = 0}
 local alive, busy, generation = true, false, 0
+local connections = {}
 local connections = {}
 local replayUnsub = {}
 local autoExecute = false
@@ -44,6 +43,7 @@ local dungeonModes = {
 }
 local dungeon = {enabled = false, mode = "infernal", difficulty = "Easy", checkpoint = 0, key = ""}
 local function dungeonPlan(mode, config, context)
+local function dungeonPlan(mode, config, context)
     if context.inside then return nil, "Partida em andamento. Auto Dungeon permanece ligado." end
     if not context.open then return nil, "Aguardando a abertura do modo..." end
     if mode.kind == "castle" then
@@ -60,6 +60,8 @@ local function dungeonPlan(mode, config, context)
     if room.Leader ~= context.userId then return nil, "Aguardando o lider iniciar o grupo." end
     if room.Locked then return nil, "Grupo iniciando. Aguardando teleporte..." end
     return {Event = mode.event, Action = "Start", Dungeon = room.Leader, Diff = mode.kind == "difficulty" and config.difficulty or nil, Check = mode.kind == "wave" and config.checkpoint > 0 and tostring(config.checkpoint) or nil}, "Iniciando a partida..."
+end
+-- END DUNGEON POLICY
 end
 local function castleCheckpoints(best)
     local options = {{id = 0, name = "Inicio  /  Andar 1"}}
@@ -112,6 +114,7 @@ local function miscDecision(config, progress)
     return "speed", selected
 end
 -- END MISC POLICY
+-- END MISC POLICY
 local function insideDungeon()
     if storage:GetAttribute("Dungeon") == true or storage:GetAttribute("InRush") == true or storage:GetAttribute("InTimeTrial") == true or storage:GetAttribute("HLRaid") == true then return true end
     for _, mode in ipairs(miscModes) do if storage:GetAttribute(mode.flag) == true then return true end end
@@ -124,6 +127,7 @@ end
 local profilePath = "AriseStudyHub/" .. player.UserId .. ".json"
 local ok, saved = pcall(function() return Http:JSONDecode(readfile(profilePath)) end)
 if ok and type(saved) == "table" and saved.userId == player.UserId then
+    state.enabled = saved.enabled == true
     state.enabled = saved.enabled == true
     pumpkin.enabled = saved.pumpkinEnabled == true
     autoExecute = saved.autoExecute == true
@@ -159,15 +163,20 @@ if ok and type(saved) == "table" and saved.userId == player.UserId then
             config.speedEnabled, config.exitEnabled = value.speedEnabled == true, value.exitEnabled == true
             for _, key in ipairs({"at2", "at3", "exitAt"}) do
                 local number = tonumber(value[key])
+                if number and number == number and number >= 0 and number <= 1000000 then config[key] = math.floor(number) end
                 if number and number == number and number >= 0 and number <= 1000000 then config[key] = math.min(mode.everyone and 1000 or 1000000, math.floor(number)) end
             end
         end
     end
 end
 local function save()
+    if type(writefile) ~= "function" then return end
+    pcall(function()
+local function save()
     if type(writefile) ~= "function" then return false, "Executor sem arquivos locais" end
     return pcall(function()
         if type(makefolder) == "function" then pcall(makefolder, "AriseStudyHub") end
+        writefile(profilePath, Http:JSONEncode({userId = player.UserId, enabled = state.enabled, misc = misc, dungeon = dungeon}))
         writefile(profilePath, Http:JSONEncode({userId = player.UserId, enabled = state.enabled, misc = misc, dungeon = dungeon,
             autoExecute = autoExecute, replay = replay, ui = uiState, pumpkinEnabled = pumpkin.enabled}))
     end)
@@ -186,6 +195,10 @@ local function living(enemy, folder)
     if not enemy or not folder or enemy.Parent ~= folder or not enemy:IsA("BasePart")
         or enemy:GetAttribute("Dead") ~= false or not enemy:GetAttribute("Id") then return false end
     local hp = enemy:GetAttribute("HP")
+        or not enemy:GetAttribute("Id") then return false end
+    if enemyState.Dead(enemy) then return false end
+    if enemy:GetAttribute("Dead") == nil and enemyState.Get(enemy.Name) == nil then return false end
+    local hp = enemyState.HP(enemy)
     if hp == nil then return false end
     local number = tonumber(hp)
     if number then return number == number and number > 0 end
@@ -204,6 +217,7 @@ local function nearest(folder, position, map)
     return selected
 end
 local function rootPart()
+local function rootPart()
     local char = player.Character
     local root = char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart)
     local human = char and char:FindFirstChildOfClass("Humanoid")
@@ -215,8 +229,19 @@ local function make(class, props, parent)
     x.Parent = parent
     return x
 end
+local colors = {bg = Color3.fromRGB(9, 13, 18), card = Color3.fromRGB(19, 26, 34), edge = Color3.fromRGB(33, 44, 55), text = Color3.fromRGB(234, 242, 247), muted = Color3.fromRGB(142, 164, 181), accent = Color3.fromRGB(17, 184, 163)}
 local colors = {bg = Color3.fromRGB(9, 15, 20), card = Color3.fromRGB(15, 25, 32), edge = Color3.fromRGB(28, 65, 72), text = Color3.fromRGB(235, 244, 247), muted = Color3.fromRGB(149, 173, 190), accent = Color3.fromRGB(0, 221, 204)}
 local gui = make("ScreenGui", {Name = "AriseStudyHub", ResetOnSpawn = false, DisplayOrder = 50, ZIndexBehavior = Enum.ZIndexBehavior.Sibling}, player:WaitForChild("PlayerGui"))
+local window = make("Frame", {Size = UDim2.fromOffset(420, 620), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), BackgroundColor3 = colors.bg, BorderSizePixel = 0}, gui)
+make("UICorner", {CornerRadius = UDim.new(0, 18)}, window)
+make("UIStroke", {Color = colors.edge, Thickness = 1}, window)
+local scale = make("UIScale", {Scale = 1}, window)
+local function fit()
+    local camera = workspace.CurrentCamera
+    if camera then scale.Scale = math.min(1, (camera.ViewportSize.X - 20) / 420, (camera.ViewportSize.Y - 40) / 620) end
+end
+fit()
+connect(RunService.RenderStepped, fit)
 local window = make("Frame", {Size = UDim2.fromOffset(460, 680), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(uiState.x, uiState.ox, uiState.y, uiState.oy), BackgroundColor3 = colors.bg, BorderSizePixel = 0, ClipsDescendants = true}, gui)
 make("UICorner", {CornerRadius = UDim.new(0, 18)}, window)
 make("UIStroke", {Color = colors.edge, Thickness = 1}, window)
@@ -268,6 +293,9 @@ end
 local logo = make("TextLabel", {Text = "S", Position = UDim2.fromOffset(20, 17), Size = UDim2.fromOffset(46, 46), BackgroundColor3 = colors.card, TextColor3 = colors.accent, Font = Enum.Font.GothamBold, TextSize = 31}, window)
 make("UICorner", {CornerRadius = UDim.new(0, 12)}, logo)
 make("UIStroke", {Color = colors.edge, Thickness = 1}, logo)
+local title = label("STUDY HUB", 20, 12, 112, 28, window, 20, true)
+title.Active = true
+label("ARISE  /  AUTOMATION", 21, 41, 110, 18, window, 11)
 local title = label("STUDY HUB", 80, 12, 190, 30, window, 22, true)
 title.Active = true
 local dragHandle = make("TextButton", {Name = "HeaderDragHandle", Text = "", Position = UDim2.fromOffset(0, 0), Size = UDim2.new(1, -100, 0, 75), BackgroundTransparency = 1, AutoButtonColor = false, ZIndex = 3}, window)
@@ -290,6 +318,7 @@ local body = make("Frame", {Position = UDim2.fromOffset(0, 85), Size = UDim2.new
 local function page(name, height)
     return make("ScrollingFrame", {Name = name, Position = UDim2.fromOffset(16, 0), Size = UDim2.new(1, -32, 1, -76), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = colors.accent, CanvasSize = UDim2.fromOffset(0, height), Visible = false}, body)
 end
+local farmPage, dungeonPage, miscPage = page("FarmPage", 350), page("DungeonPage", 566), page("MiscPage", 616)
 local farmPage, dungeonPage, miscPage = page("FarmPage", 530), page("DungeonPage", 770), page("MiscPage", 970)
 local function card(y, height, parent)
     local value = make("Frame", {Position = UDim2.fromOffset(2, y), Size = UDim2.new(1, -8, 0, height), BackgroundColor3 = colors.card, BorderSizePixel = 0}, parent)
@@ -307,6 +336,9 @@ local function toggleRow(name, caption, y, parent)
     local row = button("", y, parent)
     row.Size = UDim2.new(1, -8, 0, 78)
     label(name, 16, 10, 90, 25, row, 15, true)
+    label(caption, 16, 37, 90, 30, row, 12)
+    local indicator = make("TextLabel", {Name = "State", Text = "OFF", Position = UDim2.new(1, -66, 0.5, -14), Size = UDim2.fromOffset(50, 28), BackgroundColor3 = colors.edge, TextColor3 = colors.muted, Font = Enum.Font.GothamBold, TextSize = 11}, row)
+    make("UICorner", {CornerRadius = UDim.new(1, 0)}, indicator)
     label(caption, 16, 37, 90, 30, row, 12).Name = "Caption"
     local indicator = make("TextLabel", {Name = "State", Text = "", Position = UDim2.new(1, -68, 0.5, -14), Size = UDim2.fromOffset(52, 28), BackgroundColor3 = colors.edge}, row)
     make("UICorner", {CornerRadius = UDim.new(1, 0)}, indicator)
@@ -315,6 +347,9 @@ local function toggleRow(name, caption, y, parent)
     return row
 end
 local function toggleLook(row, enabled)
+    row.State.Text = enabled and "ON" or "OFF"
+    row.State.BackgroundColor3 = enabled and colors.accent or colors.edge
+    row.State.TextColor3 = enabled and colors.bg or colors.muted
     row.State.BackgroundColor3 = enabled and colors.accent or colors.edge
     row.State.Knob.Position = UDim2.fromOffset(enabled and 27 or 3, 3)
 end
@@ -333,10 +368,21 @@ pumpkinToggle.Name = "AutoPumpkin"
 local pumpkinStatus = label("Desligado.", 6, 234, 12, 78, farmPage, 13)
 pumpkinStatus.Name = "PumpkinStatus"
 pumpkinStatus.TextYAlignment = Enum.TextYAlignment.Top
+local farmStatusCard = card(144, 160, farmPage)
 local farmStatusCard = card(326, 160, farmPage)
 label("ATIVIDADE", 16, 10, 32, 22, farmStatusCard, 11)
 local status = label("", 16, 40, 32, 105, farmStatusCard, 14)
 status.TextYAlignment = Enum.TextYAlignment.Top
+label("Dungeon", 6, 0, 12, 30, dungeonPage, 22, true)
+local dungeonToggle = toggleRow("Auto Dungeon", "Entra no modo escolhido quando disponivel.", 48, dungeonPage)
+dungeonToggle.Name = "AutoDungeon"
+label("MODO", 6, 140, 12, 22, dungeonPage, 11)
+local dungeonModeButton = button("", 168, dungeonPage)
+local difficultyLabel = label("DIFICULDADE", 6, 230, 12, 22, dungeonPage, 11)
+local difficultyButton = button("", 258, dungeonPage)
+local checkpointField, checkpointLabel = numberField("Checkpoint inicial  /  0 = inicio", 320, dungeonPage)
+local dungeonHint = label("", 6, 402, 12, 56, dungeonPage, 12)
+local dungeonStatus = label("Auto Dungeon desligado.", 6, 470, 12, 86, dungeonPage, 13)
 label("Dungeon", 6, 0, 12, 34, dungeonPage, 26, true)
 label("Escolha o modo. O hub cuida da entrada.", 6, 38, 12, 24, dungeonPage, 13)
 local dungeonToggle = toggleRow("Auto Dungeon", "Entrar automaticamente no modo selecionado.", 78, dungeonPage)
@@ -373,9 +419,16 @@ connect(keybindButton.Activated, function()
 end)
 local hideTotalToggle = toggleRow("Ocultar total hub", "Esconde ate o S. Use a tecla para restaurar.", 298, miscPage)
 hideTotalToggle.Name = "HideTotalHub"
+local modeButton = button("", 48, miscPage)
+local speedToggle = toggleRow("Velocidade automatica", "Troca a velocidade nos andares definidos.", 110, miscPage)
 local modeButton = button("", 398, miscPage)
 local speedToggle = toggleRow("Velocidade automatica", "Troca a velocidade nos andares definidos.", 460, miscPage)
 local fields, labels = {}, {}
+fields.at2, labels.at2 = numberField("", 204, miscPage)
+fields.at3, labels.at3 = numberField("", 286, miscPage)
+local exitToggle = toggleRow("Saida automatica", "0 = continuar sem saida programada.", 378, miscPage)
+fields.exitAt, labels.exitAt = numberField("", 468, miscPage)
+local miscStatus = label("", 6, 552, 12, 60, miscPage, 12)
 fields.at2, labels.at2 = numberField("", 554, miscPage)
 fields.at3, labels.at3 = numberField("", 636, miscPage)
 local exitToggle = toggleRow("Saida automatica", "0 = continuar sem saida programada.", 728, miscPage)
@@ -383,8 +436,10 @@ fields.exitAt, labels.exitAt = numberField("", 818, miscPage)
 local miscStatus = label("", 6, 902, 12, 60, miscPage, 12)
 miscStatus.TextYAlignment = Enum.TextYAlignment.Top
 local pages = {Farm = farmPage, Dungeon = dungeonPage, Misc = miscPage}
+local pages = {Farm = farmPage, Dungeon = dungeonPage, Misc = miscPage}
 local tabs = {}
 local nav = make("Frame", {Position = UDim2.new(0, 16, 1, -64), Size = UDim2.new(1, -32, 0, 48), BackgroundColor3 = colors.card, BorderSizePixel = 0}, body)
+make("UICorner", {CornerRadius = UDim.new(0, 12)}, nav)
 make("UICorner", {CornerRadius = UDim.new(0, 12)}, nav)
 local footer = label("Configuracoes salvas por conta", 20, 0, 40, 16, body, 10)
 footer.Position, footer.TextXAlignment = UDim2.new(0, 20, 1, -17), Enum.TextXAlignment.Center
@@ -431,6 +486,8 @@ local function showPage(name)
         tabs[key].BackgroundColor3 = key == name and colors.accent or colors.card
         tabs[key].TextColor3 = key == name and colors.bg or colors.muted
     end
+        tabs[key].TextColor3 = key == name and colors.bg or colors.muted
+    end
     uiState.tab = name
     save()
 end
@@ -470,24 +527,32 @@ connect(search:GetPropertyChangedSignal("Text"), function()
 end)
 local function refresh()
     toggleLook(toggle, state.enabled)
+local function refresh()
+    toggleLook(toggle, state.enabled)
     toggleLook(dungeonCombat, state.enabled)
     toggleLook(pumpkinToggle, pumpkin.enabled)
     if not state.enabled then status.Text = "Parado. Ative para procurar mobs vivos na area atual." end
 end
 local function destroy()
+local function destroy()
     if not alive then return end
+    save()
     savePositions()
     alive, generation = false, generation + 1
     state.target = nil
+    for _, c in ipairs(connections) do c:Disconnect() end
     for _, c in ipairs(connections) do c:Disconnect() end
     for _, unsubscribe in ipairs(replayUnsub) do unsubscribe() end
     gui:Destroy()
     if env.__AriseStudyHub and env.__AriseStudyHub.state == state then env.__AriseStudyHub = nil end
 end
+env.__AriseStudyHub = {destroy = destroy, state = state, misc = misc, dungeon = dungeon}
 env.__AriseStudyHub = {destroy = destroy, state = state, misc = misc, dungeon = dungeon, replay = replay, pumpkin = pumpkin}
 local selectedMode = 1
 local function refreshMisc()
     local mode = miscModes[selectedMode]
+    local config = misc[mode.id]
+    modeButton.Text = mode.name .. "   v"
     local config = misc[mode.id]
     modeButton.Text = mode.name .. "   v"
     toggleLook(autoExecuteToggle, autoExecute)
@@ -518,19 +583,23 @@ for key, field in pairs(fields) do
         local number = tonumber(field.Text)
         local mode = miscModes[selectedMode]
         local maximum = mode.everyone and 1000 or 1000000
+        if number and number == number and number >= 0 and number <= 1000000 then misc[miscModes[selectedMode].id][key] = math.floor(number) save() end
         if number and number == number and number >= 0 and number <= maximum then misc[mode.id][key] = math.floor(number) save() end
         refreshMisc()
     end)
 end
+showPage("Dungeon")
 showPage(uiState.tab)
 refreshMisc()
 local partyClient = require(shared:WaitForChild("PartyClient"))
 local clientData = require(shared:WaitForChild("ClientData"))
 local nativeModes, nativeSchedule, rushDifficulties = {}, nil, {}
+local nativePartyShared
 local nativeOK, nativeProblem = pcall(function()
     local ui = player:WaitForChild("PlayerScripts"):FindFirstChild("NewUI", true)
     assert(ui and ui:FindFirstChild("Screens"), "Interface nativa ainda nao carregou")
     local config = require(ui.Screens.Modes.Config)
+    nativePartyShared = require(ui.Screens.Party.Shared)
     nativeSchedule = config.Status
     for _, mode in ipairs(config.MODES) do nativeModes[mode.Id] = mode end
     for _, value in ipairs(require(ui.Screens.Party.Config).RUSH_DIFFS) do
@@ -540,6 +609,7 @@ end)
 local trialDifficulties, keyChoices = {}, {}
 for _, name in ipairs(require(storage.Indexer.TimeTrialInfo).Order) do table.insert(trialDifficulties, {id = name, name = name}) end
 local itemsInfo = require(storage.Indexer.ItemsInfo)
+for name in pairs(require(storage.Indexer.KeyDungeons)) do
 local keyDungeons = require(storage.Indexer.KeyDungeons)
 for name in pairs(keyDungeons) do
     local info = itemsInfo[name]
@@ -585,6 +655,8 @@ if autoExecute then
     autoExecuteStatus.Text = success and "Ativo nesta sessao. Reabre apos teleporte." or "Auto Execute indisponivel: " .. tostring(problem)
     refreshMisc()
 end
+local function dungeonMode()
+    for _, mode in ipairs(dungeonModes) do if mode.id == dungeon.mode then return mode end end
 local function dungeonMode(config)
     for _, mode in ipairs(dungeonModes) do if mode.id == (config or dungeon).mode then return mode end end
     return dungeonModes[1]
@@ -609,6 +681,7 @@ local function refreshDungeon()
     difficultyLabel.Text = hasKey and "CHAVE / PASSE" or "DIFICULDADE"
     difficultyButton.Text = hasKey and (itemsInfo[dungeon.key] and itemsInfo[dungeon.key].Name or "Selecionar chave...") or dungeon.difficulty
     local hasCheck = mode.kind == "castle" or mode.kind == "wave"
+    checkpointField.Visible, checkpointLabel.Visible = hasCheck, hasCheck
     checkpointField.Visible, checkpointLabel.Visible = mode.kind == "wave", hasCheck
     checkpointButton.Visible = mode.kind == "castle"
     checkpointField.Text = tostring(dungeon.checkpoint)
@@ -627,6 +700,7 @@ local function refreshDungeon()
     dungeonHint.Text = hasKey and "Selecione uma chave que voce possui. A ativacao no pedestal dentro da instancia ainda e manual."
         or hasCheck and "Usa apenas checkpoints ja liberados. Configure velocidade e saida na aba Misc."
         or "Respeita a disponibilidade e os requisitos do jogo. Ative Auto Farm na aba Farm para combater."
+    if not dungeon.enabled then dungeonStatus.Text = "Auto Dungeon desligado." end
     if not dungeon.enabled and not replay.enabled then dungeonStatus.Text = "Auto Dungeon desligado." end
 end
 connect(checkpointButton.Activated, function()
@@ -653,14 +727,15 @@ connect(difficultyButton.Activated, function()
     end)
 end)
 local nextRequest = os.clock() + 10
+local lastEntrySignature
 connect(dungeonToggle.Activated, function()
     dungeon.enabled = not dungeon.enabled
-    if dungeon.enabled then replay.enabled = false nextRequest = os.clock() + 10 end
+    if dungeon.enabled then replay.enabled = false nextRequest = os.clock() + 10 lastEntrySignature = nil end
     save() refreshDungeon()
 end)
 connect(replayToggle.Activated, function()
     replay.enabled = not replay.enabled
-    if replay.enabled then dungeon.enabled = false nextRequest = os.clock() + 10 end
+    if replay.enabled then dungeon.enabled = false nextRequest = os.clock() + 10 lastEntrySignature = nil end
     save() refreshDungeon()
 end)
 connect(checkpointField.FocusLost, function()
@@ -692,10 +767,13 @@ for _, mode in ipairs(dungeonModes) do
     end
 end
 task.spawn(function()
+    local nextRequest = 0
     local wasInside = false
     while alive do
         task.wait(1)
         if not alive then break end
+        local inside = storage:GetAttribute("Dungeon") == true or storage:GetAttribute("InRush") == true or storage:GetAttribute("InTimeTrial") == true or storage:GetAttribute("HLRaid") == true
+        for _, mode in ipairs(miscModes) do if storage:GetAttribute(mode.flag) == true then inside = true end end
         local inside = insideDungeon()
         if replay.pending then
             if os.time() - replay.pending.at > 900 then
@@ -710,8 +788,11 @@ task.spawn(function()
             state.target, state.map = nil, nil
             generation += 1
             nextRequest = os.clock() + (inside and 0 or 10)
+            lastEntrySignature = nil
             wasInside = inside
         end
+        if not dungeon.enabled then continue end
+        local mode = dungeonMode()
         if not dungeon.enabled and not replay.enabled then continue end
         if replay.enabled and not replay.last then
             dungeonStatus.Text = "Sem ultima partida registrada. Entre uma vez pelo hub para registrar."
@@ -723,8 +804,27 @@ task.spawn(function()
         if not inside and state.leaving then dungeonStatus.Text = "Aguardando a saida da partida..." continue end
         local nativeMode = nativeModes[mode.id]
         if not nativeMode then dungeonStatus.Text = "Esse modo nao esta disponivel no menu desta versao." continue end
+        local portalInfo
+        if mode.id == "portal" and not inside then
+            portalInfo = nativePartyShared.DungeonInfos()
+            local currentWorld = "World" .. tostring(storage:GetAttribute("World"))
+            if not portalInfo or tostring(portalInfo.World) ~= currentWorld then
+                dungeonStatus.Text = "Aguardando portal do " .. currentWorld .. "..."
+                continue
+            end
+            if nativePartyShared.DungeonCompleted() then
+                dungeonStatus.Text = "Portal deste mundo ja concluido. Aguardando o proximo; sem gastar resets."
+                continue
+            end
+            local room = partyClient.GetRoom(mode.event)
+            if room and room.DungeonID and tostring(room.DungeonID) ~= tostring(portalInfo.ID) then
+                dungeonStatus.Text = "O grupo pertence a outro portal. Saia dele para criar um novo."
+                continue
+            end
+        end
         if mode.kind == "difficulty" then
             local valid = false
+            for _, option in ipairs(mode.id == "trial" and trialDifficulties or rushDifficulties) do if option.id == dungeon.difficulty then valid = true end end
             for _, option in ipairs(mode.id == "trial" and trialDifficulties or rushDifficulties) do if option.id == config.difficulty then valid = true end end
             if not valid then dungeonStatus.Text = "Selecione uma dificuldade disponivel para esse modo." continue end
         end
@@ -742,23 +842,32 @@ task.spawn(function()
                 local folder = main and main:FindFirstChild("__Dungeon")
                 open = open and folder and folder:FindFirstChild("Dungeon") ~= nil
             end
+            local request, message = dungeonPlan(mode, dungeon, {inside = inside, open = open, room = partyClient.GetRoom(mode.event), userId = player.UserId})
+            dungeonStatus.Text = message
+            if request and os.clock() >= nextRequest and rootPart() and not player.GameplayPaused then
+                nextRequest = os.clock() + 12
             local request, message = dungeonPlan(mode, config, {inside = inside, open = open, room = partyClient.GetRoom(mode.event), userId = player.UserId})
             dungeonStatus.Text = (replay.enabled and "Replay: " .. mode.name .. "\n" or "") .. message
-            if request and os.clock() < nextRequest then dungeonStatus.Text = "Aguardando " .. math.ceil(nextRequest - os.clock()) .. " s para entrar..." end
-            if request and os.clock() >= nextRequest and rootPart() and not player.GameplayPaused then
+            local signature = request and request.Event .. ":" .. request.Action
+            local ready = os.clock() >= nextRequest or (lastEntrySignature ~= nil and lastEntrySignature ~= signature)
+            if request and not ready then dungeonStatus.Text = "Aguardando " .. math.ceil(nextRequest - os.clock()) .. " s para entrar..." end
+            if request and ready and rootPart() and not player.GameplayPaused then
                 nextRequest = os.clock() + 10
+                lastEntrySignature = signature
                 state.entryUntil = os.clock() + 15
                 if request.Action == "Start" or request.Action == "Join" or request.Action == "TestEnter" then
                     replay.pending = readRun(config)
                     replay.pending.at = os.time()
                     local key = keyDungeons[config.key]
                     if mode.kind == "key" and key then replay.pending.map = key.Map or "" end
+                    if portalInfo then replay.pending.map = portalInfo.DungeonMap or "" end
                     save()
                 end
                 general:Fire(request)
             end
         end)
-        if not success then dungeonStatus.Text = "Entrada interrompida: " .. tostring(problem) nextRequest = os.clock() + 10 end
+        if not success then dungeonStatus.Text = "Entrada interrompida: " .. tostring(problem) nextRequest = os.clock() + 12 end
+        if not success then dungeonStatus.Text = "Entrada interrompida: " .. tostring(problem) nextRequest = os.clock() + 10 lastEntrySignature = nil end
     end
 end)
 local speedWindowUntil = 0
@@ -979,12 +1088,26 @@ task.spawn(function()
     end
 end)
 connect(close.Activated, destroy)
+connect(close.Activated, destroy)
 connect(toggle.Activated, function()
     state.enabled = not state.enabled
     state.target, state.map = nil, nil
     generation += 1
     save()
     refresh()
+end)
+local dragging, start, original
+connect(title.InputBegan, function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging, start, original = true, input.Position, window.Position end
+end)
+connect(Input.InputChanged, function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - start
+        window.Position = original + UDim2.fromOffset(delta.X, delta.Y)
+    end
+end)
+connect(Input.InputEnded, function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
 end)
 local dragging, dragInput, start, original, dragTarget
 local function beginDrag(input, target)
@@ -1017,6 +1140,9 @@ end)
 connect(gui.Destroying, destroy)
 -- Um unico controlador de movimento. Nao ataca quando desligado ou sem alvo confirmado.
 connect(RunService.Heartbeat, function()
+    if not alive or not state.enabled or state.leaving or player.GameplayPaused then return end
+    local root, folder = rootPart(), enemyFolder()
+connect(RunService.Heartbeat, function()
     if not alive or state.leaving or player.GameplayPaused or os.clock() < (state.entryUntil or 0) then return end
     if state.pumpkinBusy then
         local root, target = rootPart(), pumpkin.target
@@ -1029,16 +1155,23 @@ connect(RunService.Heartbeat, function()
     end
     if not state.enabled then return end
     local root, folder = rootPart(), enemyFolder()
+    if root and state.lastFarmPosition and (root.Position - state.lastFarmPosition).Magnitude > 300 then
+        state.target, state.map, state.lastFarmPosition = nil, nil, root.Position
+        return
+    end
     if not root or not living(state.target, folder) then return end
     if player:GetAttribute("Mounted") or player:GetAttribute("Swimming") then return end
     local position = state.target.Position
     root.AssemblyLinearVelocity = Vector3.zero
     root.CFrame = CFrame.lookAt(position + Vector3.new(0, 3, 4), position + Vector3.new(0, 3, 0))
+    root.CFrame = CFrame.lookAt(position + Vector3.new(0, 3, 4), position + Vector3.new(0, 3, 0))
+    state.lastFarmPosition = root.Position
 end)
 task.spawn(function()
     while alive do
         task.wait(0.2)
         if not alive then break end
+        if not state.enabled then continue end
         if not state.enabled then continue end
         if state.pumpkinBusy or os.clock() < (state.entryUntil or 0) then state.target = nil status.Text = "Aguardando coleta ou entrada..." continue end
         if state.leaving then state.target = nil status.Text = "Saindo da dungeon..." continue end
@@ -1049,14 +1182,22 @@ task.spawn(function()
             if state.target and (state.target:GetAttribute("Dead") == true or tonumber(state.target:GetAttribute("HP")) == 0) then state.kills += 1 end
             state.target = nearest(folder, root.Position, state.map)
             if state.target and not state.map then state.map = tostring(state.target:GetAttribute("MapId")) end
+        if player:GetAttribute("Mounted") or player:GetAttribute("Swimming") then status.Text = "Desmonte ou saia da agua para atacar." continue end
+        if insideDungeon() then state.map = nil end
+        if not living(state.target, folder) then
+            if state.target and (enemyState.Dead(state.target) or tonumber(enemyState.HP(state.target)) == 0) then state.kills += 1 end
+            state.target = nearest(folder, root.Position, state.map)
+            if state.target and not state.map and not insideDungeon() then state.map = tostring(state.target:GetAttribute("MapId")) end
         end
         local target = state.target
         if not target then status.Text = "Aguardando mobs vivos no mapa atual..." continue end
         status.Text = "Alvo: " .. tostring(target:GetAttribute("Id")) .. "\nHP: " .. tostring(target:GetAttribute("HP")) .. "\nMobs derrotados: " .. state.kills
+        status.Text = "Alvo: " .. tostring(target:GetAttribute("Id")) .. "\nHP: " .. tostring(enemyState.HP(target)) .. "\nMobs derrotados: " .. state.kills
         if not busy and (root.Position - target.Position).Magnitude <= 9 then
             busy = true
             local version = generation
             task.spawn(function()
+                if alive and state.enabled and not state.leaving and version == generation and state.target == target and living(target, enemyFolder()) then
                 if alive and state.enabled and not state.leaving and not state.pumpkinBusy and os.clock() >= (state.entryUntil or 0) and version == generation and state.target == target and living(target, enemyFolder()) then
                     local success, problem = pcall(weapons.Click, {UserInputType = Enum.UserInputType.MouseButton1, KeyCode = Enum.KeyCode.ButtonX}, false)
                     if success then state.attacks += 1
@@ -1076,61 +1217,3 @@ task.spawn(function()
 end)
 refresh()
 print("[AriseStudyHub] Pronto: Farm, Dungeon e Misc. Estado do farm: " .. tostring(state.enabled))
-]====]
-local bootstrapSource = [====[
--- Continuidade da sessao atual do Roblox; nao usa a pasta autoexec.
-local userId, resume = ...
-if not game:IsLoaded() then game.Loaded:Wait() end
-local player = game:GetService("Players").LocalPlayer
-while not player do task.wait() player = game:GetService("Players").LocalPlayer end
-if player.UserId ~= userId then return nil end
-local env = getgenv()
-local path = "AriseStudyHub/" .. userId .. ".json"
-local function enabled()
-    local ok, data = pcall(function() return game:GetService("HttpService"):JSONDecode(readfile(path)) end)
-    return ok and type(data) == "table" and data.userId == userId and data.autoExecute == true
-end
-if not enabled() then return nil end
-local previous = env.__AriseAutoSession
-if previous and previous.version == 1 then return previous end
-if previous and previous.connection then previous.connection:Disconnect() end
-local queue = queue_on_teleport or queueonteleport or (syn and syn.queue_on_teleport)
-if type(queue) ~= "function" then return nil end
-local session = {version = 1, queued = false}
-env.__AriseAutoSession = session
-function session.arm()
-    if session.queued or not enabled() then return end
-    local source = string.format('local f = loadstring(readfile("AriseStudyHub/AutoExecute.luau")); if f then f(%s, true) end', tostring(userId))
-    local ok, problem = pcall(queue, source)
-    session.queued, session.problem = ok, not ok and tostring(problem) or nil
-end
-session.arm()
-session.connection = player.OnTeleport:Connect(function(state)
-    if state == Enum.TeleportState.Failed then session.queued = false session.arm() return end
-    if state ~= Enum.TeleportState.Started then return end
-    if session.beforeTeleport then session.beforeTeleport() end
-    session.arm()
-end)
-if resume and game.GameId == 7074860883 then
-    local deadline = os.clock() + 120
-    local ready = false
-    repeat
-        local shared = game:GetService("ReplicatedStorage"):FindFirstChild("SharedModules")
-        local scripts = player:FindFirstChild("PlayerScripts")
-        local ui = scripts and scripts:FindFirstChild("NewUI", true)
-        ready = shared and shared:FindFirstChild("WeaponsModule") and ui and ui:FindFirstChild("Screens")
-        if ready then break end
-        task.wait(0.5)
-    until os.clock() >= deadline or not enabled()
-    if ready and enabled() then
-        local ok, problem = pcall(function()
-            assert(loadstring(readfile("AriseStudyHub/Hub.luau")))()
-        end)
-        if not ok then warn("[AriseStudyHub] Auto Execute: " .. tostring(problem)) end
-    end
-end
-return session
-]====]
-writefile("AriseStudyHub/Hub.luau", hubSource)
-writefile("AriseStudyHub/AutoExecute.luau", bootstrapSource)
-assert(loadstring(hubSource))()
